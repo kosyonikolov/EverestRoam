@@ -39,8 +39,16 @@ struct FileEdge
 struct SearchConfig
 {
     int minEdgeRepeatDistance = 6;
-    float maxPrintKm = 700;
+    float maxPrintKm = 500;
     bool printOnBest = true;
+
+    struct
+    {
+        // Vertical meter's cost is 1
+        float linearKmCost = 25;
+        // Bonus points for visiting many places
+        float uniqueVertexCost = -1000;
+    } cost;
 };
 
 std::vector<FileEdge> readGraphFile(const std::string & fileName)
@@ -74,26 +82,38 @@ std::vector<FileEdge> readGraphFile(const std::string & fileName)
     return result;
 }
 
+int countUniqueVertices(const Graph & graph, const std::vector<int> & path)
+{
+    std::vector<bool> visited(graph.nVerts, false);
+    if (!path.empty())
+    {
+        const auto & first = graph.edges[path[0]];
+        visited[first.src] = true;
+        for (int i = 0; i < path.size(); i++)
+        {
+            const int v = graph.edges[path[i]].dst;
+            visited[v] = true;
+        }
+    }
+    const int nVisited = std::count(visited.begin(), visited.end(), true);
+    return nVisited;
+}
+
 void printGraphPath(const Graph & graph, const std::vector<int> & path, std::ostream & stream)
 {
-    // Count how many vertices get visited
-    std::vector<bool> visited(graph.nVerts, false);
     std::stringstream ss;
     if (!path.empty())
     {
         const auto & first = graph.edges[path[0]];
         ss << graph.vertex2Name[first.src];
-        visited[first.src] = true;
         for (int i = 0; i < path.size(); i++)
         {
             const int v = graph.edges[path[i]].dst;
             ss << " - " << graph.vertex2Name[v];
-            visited[v] = true;
         }
     }
 
-    const int nVisited = std::count(visited.begin(), visited.end(), true);
-    stream << std::format("[{}] {}", nVisited, ss.str());
+    stream << ss.str();
 }
 
 void findAllPaths(const Graph & graph, const int start, const float distanceTarget, const int elevTarget,
@@ -120,14 +140,21 @@ void findAllPaths(const Graph & graph, const int start, const float distanceTarg
         // Check if we are done
         if (curr.dist >= distanceTarget && curr.elevGain >= elevTarget)
         {
-            if (curr.dist <= cfg.maxPrintKm && (!cfg.printOnBest || curr.dist < bestSoFar))
+            // Calculate cost
+            const int nVisited = countUniqueVertices(graph, path);
+            const float verticalCost = curr.elevGain;
+            const float linearCost = curr.dist * cfg.cost.linearKmCost;
+            const float uniqueCost = nVisited * cfg.cost.uniqueVertexCost;
+            const float totalCost = verticalCost + linearCost + uniqueCost;
+
+            if (curr.dist <= cfg.maxPrintKm && (!cfg.printOnBest || totalCost < bestSoFar))
             {
                 // Avoid routes that are too flat
                 printGraphPath(graph, path, stream);
-                stream << std::format("\n{} km / {} m", curr.dist, curr.elevGain);
+                stream << std::format("\n{} km / {} m / {} places\nTotal cost = {}", curr.dist, curr.elevGain, nVisited, totalCost);
                 stream << std::endl;
+                bestSoFar = std::min(bestSoFar, totalCost); // Only consider those paths that are short enough
             }
-            bestSoFar = std::min(bestSoFar, curr.dist);
 
             stack.pop();
             path.pop_back();
