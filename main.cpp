@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <random>
 
 struct Edge
 {
@@ -38,7 +39,8 @@ struct FileEdge
 struct SearchConfig
 {
     int minEdgeRepeatDistance = 6;
-    float maxPrintKm = 600;
+    float maxPrintKm = 700;
+    bool printOnBest = true;
 };
 
 std::vector<FileEdge> readGraphFile(const std::string & fileName)
@@ -109,6 +111,8 @@ void findAllPaths(const Graph & graph, const int start, const float distanceTarg
     std::stack<DfsElem> stack;
     stack.push({start, 0, 0, 0});
 
+    float bestSoFar = 1e6;
+
     while (!stack.empty())
     {
         auto & curr = stack.top();
@@ -116,14 +120,15 @@ void findAllPaths(const Graph & graph, const int start, const float distanceTarg
         // Check if we are done
         if (curr.dist >= distanceTarget && curr.elevGain >= elevTarget)
         {
-            if (curr.dist <= cfg.maxPrintKm)
+            if (curr.dist <= cfg.maxPrintKm && (!cfg.printOnBest || curr.dist < bestSoFar))
             {
                 // Avoid routes that are too flat
                 printGraphPath(graph, path, stream);
                 stream << std::format("\n{} km / {} m", curr.dist, curr.elevGain);
                 stream << std::endl;
             }
-            
+            bestSoFar = std::min(bestSoFar, curr.dist);
+
             stack.pop();
             path.pop_back();
             continue;
@@ -229,7 +234,17 @@ int main(int argc, char ** argv)
     const std::string startName = argv[2];
 
     const auto fileEdges = readGraphFile(graphFileName);
-    const auto graph = buildGraph(fileEdges);
+    auto graph = buildGraph(fileEdges);
+    const bool randomize = true;
+    if (randomize)
+    {
+        std::cout << "Randomizing edge order...\n";
+        std::default_random_engine rng(std::random_device{}());
+        for (auto & localEdges : graph.localEdges)
+        {
+            std::shuffle(localEdges.begin(), localEdges.end(), rng);
+        }
+    }
 
     const auto itStart = graph.name2Vertex.find(startName);
     if (itStart == graph.name2Vertex.end())
