@@ -125,8 +125,10 @@ void printGraphPath(const Graph & graph, const std::vector<int> & path, std::ost
         ss << graph.vertex2Name[first.src];
         for (int i = 0; i < path.size(); i++)
         {
-            const int v = graph.edges[path[i]].dst;
-            ss << " - " << graph.vertex2Name[v];
+            const auto & e = graph.edges[path[i]];
+            const int v = e.dst;
+            const bool isTrain = e.distance < 1;
+            ss << (isTrain ? " >>> " : " - ") << graph.vertex2Name[v];
         }
     }
 
@@ -214,7 +216,7 @@ bool checkForTailCycles(const std::vector<int> & vertexPath, const int minLength
 }
 
 std::optional<Path> findPath(const Graph & graph, const int start, const float distanceTarget, const int elevTarget,
-                             const SearchConfig & cfg, const float maxCost)
+                             const SearchConfig & cfg, const float maxCost, const int end = -1)
 {
     std::vector<int> pathEdges;
     std::vector<int> pathVertices;
@@ -275,7 +277,7 @@ std::optional<Path> findPath(const Graph & graph, const int start, const float d
         }
 
         // Check if we are done
-        if (curr.dist >= distanceTarget && curr.elevGain >= elevTarget)
+        if (curr.dist >= distanceTarget && curr.elevGain >= elevTarget && (end < 0 || curr.v == end))
         {
             Path result;
             result.edges = pathEdges;
@@ -349,8 +351,8 @@ std::optional<Path> findPath(const Graph & graph, const int start, const float d
 
 int main(int argc, char ** argv)
 {
-    const std::string usageMsg = "./EverestRoam <graph file> <start>";
-    if (argc != 3)
+    const std::string usageMsg = "./EverestRoam <graph file> <start> [end]";
+    if (argc < 3)
     {
         std::cerr << usageMsg << "\n";
         return 1;
@@ -358,6 +360,7 @@ int main(int argc, char ** argv)
 
     const std::string graphFileName = argv[1];
     const std::string startName = argv[2];
+    const std::string endName = argc > 3 ? argv[3] : "";
 
     const auto fileEdges = readGraphFile(graphFileName);
     auto graph = buildGraph(fileEdges);
@@ -380,8 +383,20 @@ int main(int argc, char ** argv)
     }
     const int idStart = itStart->second;
 
+    int idEnd = -1;
+    if (endName != "")
+    {
+        const auto itEnd = graph.name2Vertex.find(endName);
+        if (itEnd == graph.name2Vertex.end())
+        {
+            std::cerr << std::format("End name [{}] not found in graph!\n", endName);
+            return 1;
+        }
+        idEnd = itEnd->second;
+    }
+
     const float distanceTarget = 400; // km
-    const int elevTarget = 10000; // m
+    const int elevTarget = 10000;     // m
 
     SearchConfig searchCfg;
     float lowCost = distanceTarget * searchCfg.cost.linearKmCost + elevTarget;
@@ -389,13 +404,13 @@ int main(int argc, char ** argv)
     std::optional<Path> bestPath;
 
     // Find first cost limit that works
-    const float scale = 1.2f;
+    const float scale = 2;
     float highCost = lowCost * scale;
     const int maxIters = 20;
     for (int i = 0; i < maxIters; i++)
     {
         std::cout << std::format("Trying cost = {}\n", highCost);
-        auto maybePath = findPath(graph, idStart, distanceTarget, elevTarget, searchCfg, highCost);
+        auto maybePath = findPath(graph, idStart, distanceTarget, elevTarget, searchCfg, highCost, idEnd);
         if (maybePath)
         {
             std::cout << std::format("Found possible path at {}\n", highCost);
@@ -420,7 +435,7 @@ int main(int argc, char ** argv)
     {
         const float midCost = 0.5 * (highCost + lowCost);
         std::cout << std::format("Trying cost = {}\n", midCost);
-        auto maybePath = findPath(graph, idStart, distanceTarget, elevTarget, searchCfg, midCost);
+        auto maybePath = findPath(graph, idStart, distanceTarget, elevTarget, searchCfg, midCost, idEnd);
         if (maybePath)
         {
             std::cout << std::format("Found possible path at {}\n", midCost);
