@@ -18,8 +18,8 @@ SestrimoT Belovo 8.08 20 100
 Belovo Yundola 25.7 1070 0
 Yundola BelmekenFork 22.5 640 150
 Yundola VelingradZhp 17.1 20 670
-VelingradZhp SeptemvriRounadbout 30.4 110 610
-SeptemvriRounadbout Belovo 10.1 100 20
+VelingradZhp VarvaraT 26.0 110 560
+SeptemvriRoundabout Belovo 10.1 100 20
 SaparevaBanya Dupnitsa 12.1 20 260
 Dupnitsa Razlog 84.3 1090 780
 Razlog Bansko 7.15 160 10
@@ -33,5 +33,14 @@ Batak Peshtera 15.9 10 610
 Peshtera DebrashtitsaFork 12 90 300
 DebrashtitsaFork Debrashtitsa 4.68 60 0
 DebrashtitsaFork PazardzhikRoundabout 6.36 0 20
-PazardzhikRoundabout SeptemvriRounadbout 15.6 40 0
+PazardzhikRoundabout SeptemvriRoundabout 15.6 40 0
 Debrashtitsa Batak 33.8 1190 440
+Sarnitsa VelingradZhp 47.5 380 860
+Sarnitsa Dospat 21.4 330 300
+Belovo VarvaraT 13.5 130 160
+SeptemvriRoundabout VarvaraT 4.4 40 0
+VarvaraT Debrashtitsa 12.4 120 120
+Peshtera Krichim 22 110 310
+Krichim DevinT 58.3 1280 810
+DevinT Dospat 41 1060 530
+SaparevaBanya RilskiLift 14.9 850 20

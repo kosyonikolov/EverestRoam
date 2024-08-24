@@ -57,8 +57,8 @@ struct SearchConfig
         float linearKmCost = 25;
         // Bonus points for visiting many places
         float uniqueVertexCost = -2000;
-        std::vector<float> edgeRepeatPenalty = {500, 1500, 3000};
-        int maxVertexCount = 3;
+        std::vector<float> edgeRepeatPenalty = {500, 1000};
+        std::vector<int> vertexRepeatPenalty = {0, 500, 1000};
     } cost;
 
     struct
@@ -225,12 +225,12 @@ std::optional<Path> findPath(const Graph & graph, const int start, const float d
         int v;
         float dist = 0;
         int elevGain = 0;
-        float edgePenalty = 0;
+        float repeatPenalty = 0;
         int i = 0; // Last used edge
 
         float calcCost(const SearchConfig & cfg) const
         {
-            return elevGain + dist * cfg.cost.linearKmCost + edgePenalty;
+            return elevGain + dist * cfg.cost.linearKmCost + repeatPenalty;
         }
     };
 
@@ -253,7 +253,7 @@ std::optional<Path> findPath(const Graph & graph, const int start, const float d
     };
 
     const int edgeCountLimit = cfg.cost.edgeRepeatPenalty.size();
-    const int vertexCountLimit = cfg.cost.maxVertexCount - 1;
+    const int vertexCountLimit = cfg.cost.vertexRepeatPenalty.size() - 1;
     while (!stack.empty())
     {
         auto & curr = stack.top();
@@ -284,8 +284,6 @@ std::optional<Path> findPath(const Graph & graph, const int start, const float d
             result.elevationGain = curr.elevGain;
             return result;
         }
-
-        const int forbiddenIdx0 = std::max<int>(pathEdges.size() - cfg.minEdgeRepeatDistance, 0);
 
         // Check if we have edges we can visit
         const int v = curr.v;
@@ -321,10 +319,18 @@ std::optional<Path> findPath(const Graph & graph, const int start, const float d
             {
                 const int repIdx = newEdgeCnt - 2;
                 const int penalty = penaltyLut[std::min<int>(repIdx, penaltyLut.size() - 1)];
-                next.edgePenalty += penalty;
+                next.repeatPenalty += penalty;
             }
 
-            vertexCounts[next.v]++;
+            // Calc vertex penalty
+            const int newVertexCnt = ++vertexCounts[next.v];
+            const auto & vertPenaltyLut = cfg.cost.vertexRepeatPenalty;
+            if (newVertexCnt >= 2 && !vertPenaltyLut.empty())
+            {
+                const int repIdx = newVertexCnt - 2;
+                const int penalty = vertPenaltyLut[std::min<int>(repIdx, vertPenaltyLut.size() - 1)];
+                next.repeatPenalty += penalty;
+            }
 
             stack.push(next);
             pathVertices.push_back(next.v);
@@ -380,6 +386,8 @@ int main(int argc, char ** argv)
     SearchConfig searchCfg;
     float lowCost = distanceTarget * searchCfg.cost.linearKmCost + elevTarget;
 
+    std::optional<Path> bestPath;
+
     // Find first cost limit that works
     const float scale = 1.2f;
     float highCost = lowCost * scale;
@@ -392,9 +400,16 @@ int main(int argc, char ** argv)
         {
             std::cout << std::format("Found possible path at {}\n", highCost);
             printGraphPath(graph, maybePath.value(), std::cout);
+            bestPath = maybePath;
             break;
         }
         highCost *= scale;
+    }
+
+    if (!bestPath)
+    {
+        std::cout << "No possible path!\n";
+        return 0;
     }
 
     std::cout << std::format("Search range: [{}, {}]\n", lowCost, highCost);
@@ -411,6 +426,11 @@ int main(int argc, char ** argv)
             std::cout << std::format("Found possible path at {}\n", midCost);
             printGraphPath(graph, maybePath.value(), std::cout);
             highCost = midCost;
+
+            if (maybePath->cost < bestPath->cost)
+            {
+                bestPath = maybePath;
+            }
         }
         else
         {
@@ -418,6 +438,9 @@ int main(int argc, char ** argv)
         }
         std::cout << std::format("Search range: [{}, {}]\n", lowCost, highCost);
     }
+
+    std::cout << "\n====== Best path ======\n";
+    printGraphPath(graph, bestPath.value(), std::cout);
 
     return 0;
 }
