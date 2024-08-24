@@ -57,9 +57,15 @@ struct SearchConfig
         float linearKmCost = 25;
         // Bonus points for visiting many places
         float uniqueVertexCost = -2000;
-        std::vector<float> edgeRepeatPenalty = {500, 1500};
+        std::vector<float> edgeRepeatPenalty = {500, 1500, 3000};
         int maxVertexCount = 3;
     } cost;
+
+    struct
+    {
+        int minLength = 2;
+        int maxLength = 4;
+    } tailCycle;
 };
 
 std::vector<FileEdge> readGraphFile(const std::string & fileName)
@@ -134,97 +140,6 @@ void printGraphPath(const Graph & graph, const Path & path, std::ostream & strea
     stream << std::format("{} km / {} m\nCost = {}\n", path.distance, path.elevationGain, path.cost);
 }
 
-void findAllPaths(const Graph & graph, const int start, const float distanceTarget, const int elevTarget,
-                  const SearchConfig & cfg, std::ostream & stream)
-{
-    std::vector<int> path;
-    struct DfsElem
-    {
-        int v;
-        float dist;
-        int elevGain;
-        int i = 0; // Last used edge
-    };
-
-    std::stack<DfsElem> stack;
-    stack.push({start, 0, 0, 0});
-
-    float bestSoFar = 1e6;
-
-    while (!stack.empty())
-    {
-        auto & curr = stack.top();
-
-        // Check if we are done
-        if (curr.dist >= distanceTarget && curr.elevGain >= elevTarget)
-        {
-            // Calculate cost
-            const int nVisited = countUniqueVertices(graph, path);
-            const float verticalCost = curr.elevGain;
-            const float linearCost = curr.dist * cfg.cost.linearKmCost;
-            const float uniqueCost = nVisited * cfg.cost.uniqueVertexCost;
-            const float totalCost = verticalCost + linearCost + uniqueCost;
-
-            if (curr.dist <= cfg.maxPrintKm && (!cfg.printOnBest || totalCost < bestSoFar))
-            {
-                // Avoid routes that are too flat
-                printGraphPath(graph, path, stream);
-                stream << std::format("\n{} km / {} m / {} places\nTotal cost = {}", curr.dist, curr.elevGain, nVisited,
-                                      totalCost);
-                stream << std::endl;
-                bestSoFar = std::min(bestSoFar, totalCost); // Only consider those paths that are short enough
-            }
-
-            stack.pop();
-            path.pop_back();
-            continue;
-        }
-
-        const int forbiddenIdx0 = std::max<int>(path.size() - cfg.minEdgeRepeatDistance, 0);
-
-        // Check if we have edges we can visit
-        const int v = curr.v;
-        const auto & edgeIds = graph.localEdges[v];
-        int i = curr.i;
-        int nextEdgeIdx = -1;
-        for (; i < edgeIds.size(); i++)
-        {
-            const int edgeIdx = edgeIds[i];
-            auto it = std::find(path.begin() + forbiddenIdx0, path.end(), edgeIdx);
-            if (it == path.end())
-            {
-                // Valid edge
-                nextEdgeIdx = edgeIdx;
-                break;
-            }
-        }
-
-        if (nextEdgeIdx >= 0)
-        {
-            // There is a valid edge - travel along it
-            // Increase the current element's counter so that we don't use it again
-            curr.i = i + 1;
-            const auto & e = graph.edges[nextEdgeIdx];
-            DfsElem next;
-            next.v = e.dst;
-            next.dist = curr.dist + e.distance;
-            next.elevGain = curr.elevGain + e.elevationGain;
-            stack.push(next);
-            path.push_back(nextEdgeIdx);
-        }
-        else
-        {
-            // We've ran out of edges for this vertex
-            // Time to remove it from the stack - also remove the edge that lead us here
-            stack.pop();
-            if (!path.empty())
-            {
-                path.pop_back();
-            }
-        }
-    }
-}
-
 Graph buildGraph(const std::vector<FileEdge> & fileEdges)
 {
     Graph result;
@@ -268,10 +183,41 @@ Graph buildGraph(const std::vector<FileEdge> & fileEdges)
     return result;
 }
 
+bool checkForTailCycles(const std::vector<int> & vertexPath, const int minLength, const int maxLength)
+{
+    const int n = vertexPath.size();
+    for (int k = minLength; k <= maxLength; k++)
+    {
+        if (2 * k > n)
+        {
+            break;
+        }
+        const int i1 = n - k;
+        const int i2 = i1 - k;
+        bool isLoop = true;
+        for (int j = 0; j < k; j++)
+        {
+            if (vertexPath[i1 + j] != vertexPath[i2 + j])
+            {
+                isLoop = false;
+                break;
+            }
+        }
+
+        if (isLoop)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 std::optional<Path> findPath(const Graph & graph, const int start, const float distanceTarget, const int elevTarget,
                              const SearchConfig & cfg, const float maxCost)
 {
     std::vector<int> pathEdges;
+    std::vector<int> pathVertices;
     std::vector<int> edgeCounts(graph.edges.size(), 0);
     std::vector<int> vertexCounts(graph.nVerts, 0);
     struct DfsElem
@@ -290,11 +236,13 @@ std::optional<Path> findPath(const Graph & graph, const int start, const float d
 
     std::stack<DfsElem> stack;
     stack.push({start});
+    pathVertices.push_back(start);
     vertexCounts[start]++;
 
     auto pop = [&]()
     {
         stack.pop();
+        pathVertices.pop_back();
         if (!pathEdges.empty())
         {
             int lastEdge = pathEdges.back();
@@ -313,6 +261,14 @@ std::optional<Path> findPath(const Graph & graph, const int start, const float d
         const float currCost = curr.calcCost(cfg);
         // Check if we have exceeded the max cost
         if (currCost > maxCost)
+        {
+            pop();
+            continue;
+        }
+
+        // Check if we've made an illegal tail cycle
+        const bool haveTailCycle = checkForTailCycles(pathVertices, cfg.tailCycle.minLength, cfg.tailCycle.maxLength);
+        if (haveTailCycle)
         {
             pop();
             continue;
@@ -371,6 +327,7 @@ std::optional<Path> findPath(const Graph & graph, const int start, const float d
             vertexCounts[next.v]++;
 
             stack.push(next);
+            pathVertices.push_back(next.v);
             pathEdges.push_back(nextEdgeIdx);
         }
         else
@@ -437,6 +394,7 @@ int main(int argc, char ** argv)
             printGraphPath(graph, maybePath.value(), std::cout);
             break;
         }
+        highCost *= scale;
     }
 
     std::cout << std::format("Search range: [{}, {}]\n", lowCost, highCost);
