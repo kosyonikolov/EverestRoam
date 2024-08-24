@@ -4,12 +4,13 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <optional>
+#include <random>
 #include <sstream>
 #include <stack>
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <random>
 
 struct Edge
 {
@@ -25,6 +26,14 @@ struct Graph
     std::vector<std::string> vertex2Name;
     std::vector<Edge> edges;
     std::vector<std::vector<int>> localEdges; // per-vertex
+};
+
+struct Path
+{
+    std::vector<int> edges;
+    float distance;
+    int elevationGain;
+    float cost;
 };
 
 struct FileEdge
@@ -47,7 +56,9 @@ struct SearchConfig
         // Vertical meter's cost is 1
         float linearKmCost = 25;
         // Bonus points for visiting many places
-        float uniqueVertexCost = -1000;
+        float uniqueVertexCost = -2000;
+        std::vector<float> edgeRepeatPenalty = {500, 1500};
+        int maxVertexCount = 3;
     } cost;
 };
 
@@ -116,6 +127,13 @@ void printGraphPath(const Graph & graph, const std::vector<int> & path, std::ost
     stream << ss.str();
 }
 
+void printGraphPath(const Graph & graph, const Path & path, std::ostream & stream)
+{
+    printGraphPath(graph, path.edges, stream);
+    stream << "\n";
+    stream << std::format("{} km / {} m\nCost = {}\n", path.distance, path.elevationGain, path.cost);
+}
+
 void findAllPaths(const Graph & graph, const int start, const float distanceTarget, const int elevTarget,
                   const SearchConfig & cfg, std::ostream & stream)
 {
@@ -151,7 +169,8 @@ void findAllPaths(const Graph & graph, const int start, const float distanceTarg
             {
                 // Avoid routes that are too flat
                 printGraphPath(graph, path, stream);
-                stream << std::format("\n{} km / {} m / {} places\nTotal cost = {}", curr.dist, curr.elevGain, nVisited, totalCost);
+                stream << std::format("\n{} km / {} m / {} places\nTotal cost = {}", curr.dist, curr.elevGain, nVisited,
+                                      totalCost);
                 stream << std::endl;
                 bestSoFar = std::min(bestSoFar, totalCost); // Only consider those paths that are short enough
             }
@@ -210,7 +229,8 @@ Graph buildGraph(const std::vector<FileEdge> & fileEdges)
 {
     Graph result;
 
-    auto getId = [&](const std::string & name) -> int {
+    auto getId = [&](const std::string & name) -> int
+    {
         auto it = result.name2Vertex.find(name);
         if (it != result.name2Vertex.end())
         {
@@ -248,6 +268,122 @@ Graph buildGraph(const std::vector<FileEdge> & fileEdges)
     return result;
 }
 
+std::optional<Path> findPath(const Graph & graph, const int start, const float distanceTarget, const int elevTarget,
+                             const SearchConfig & cfg, const float maxCost)
+{
+    std::vector<int> pathEdges;
+    std::vector<int> edgeCounts(graph.edges.size(), 0);
+    std::vector<int> vertexCounts(graph.nVerts, 0);
+    struct DfsElem
+    {
+        int v;
+        float dist = 0;
+        int elevGain = 0;
+        float edgePenalty = 0;
+        int i = 0; // Last used edge
+
+        float calcCost(const SearchConfig & cfg) const
+        {
+            return elevGain + dist * cfg.cost.linearKmCost + edgePenalty;
+        }
+    };
+
+    std::stack<DfsElem> stack;
+    stack.push({start});
+    vertexCounts[start]++;
+
+    auto pop = [&]()
+    {
+        stack.pop();
+        if (!pathEdges.empty())
+        {
+            int lastEdge = pathEdges.back();
+            edgeCounts[lastEdge]--;
+            vertexCounts[graph.edges[lastEdge].dst]--;
+            pathEdges.pop_back();
+        }
+    };
+
+    const int edgeCountLimit = cfg.cost.edgeRepeatPenalty.size();
+    const int vertexCountLimit = cfg.cost.maxVertexCount - 1;
+    while (!stack.empty())
+    {
+        auto & curr = stack.top();
+
+        const float currCost = curr.calcCost(cfg);
+        // Check if we have exceeded the max cost
+        if (currCost > maxCost)
+        {
+            pop();
+            continue;
+        }
+
+        // Check if we are done
+        if (curr.dist >= distanceTarget && curr.elevGain >= elevTarget)
+        {
+            Path result;
+            result.edges = pathEdges;
+            result.cost = currCost;
+            result.distance = curr.dist;
+            result.elevationGain = curr.elevGain;
+            return result;
+        }
+
+        const int forbiddenIdx0 = std::max<int>(pathEdges.size() - cfg.minEdgeRepeatDistance, 0);
+
+        // Check if we have edges we can visit
+        const int v = curr.v;
+        const auto & edgeIds = graph.localEdges[v];
+        int i = curr.i;
+        int nextEdgeIdx = -1;
+        for (; i < edgeIds.size(); i++)
+        {
+            const int edgeIdx = edgeIds[i];
+            if (edgeCounts[edgeIdx] < edgeCountLimit && vertexCounts[graph.edges[edgeIdx].dst] < vertexCountLimit)
+            {
+                // Valid edge
+                nextEdgeIdx = edgeIdx;
+                break;
+            }
+        }
+
+        if (nextEdgeIdx >= 0)
+        {
+            // There is a valid edge - travel along it
+            // Increase the current element's counter so that we don't use it again
+            curr.i = i + 1;
+            const auto & e = graph.edges[nextEdgeIdx];
+            DfsElem next;
+            next.v = e.dst;
+            next.dist = curr.dist + e.distance;
+            next.elevGain = curr.elevGain + e.elevationGain;
+
+            // Calc edge penalty
+            const int newEdgeCnt = ++edgeCounts[nextEdgeIdx];
+            const auto & penaltyLut = cfg.cost.edgeRepeatPenalty;
+            if (newEdgeCnt >= 2 && !penaltyLut.empty())
+            {
+                const int repIdx = newEdgeCnt - 2;
+                const int penalty = penaltyLut[std::min<int>(repIdx, penaltyLut.size() - 1)];
+                next.edgePenalty += penalty;
+            }
+
+            vertexCounts[next.v]++;
+
+            stack.push(next);
+            pathEdges.push_back(nextEdgeIdx);
+        }
+        else
+        {
+            // We've ran out of edges for this vertex
+            // Time to remove it from the stack - also remove the edge that lead us here
+            pop();
+        }
+    }
+
+    return {};
+}
+
 int main(int argc, char ** argv)
 {
     const std::string usageMsg = "./EverestRoam <graph file> <start>";
@@ -281,8 +417,49 @@ int main(int argc, char ** argv)
     }
     const int idStart = itStart->second;
 
+    const float distanceTarget = 400; // km
+    const int elevTarget = 10000; // m
+
     SearchConfig searchCfg;
-    findAllPaths(graph, idStart, 400, 10000, searchCfg, std::cout);
+    float lowCost = distanceTarget * searchCfg.cost.linearKmCost + elevTarget;
+
+    // Find first cost limit that works
+    const float scale = 1.2f;
+    float highCost = lowCost * scale;
+    const int maxIters = 20;
+    for (int i = 0; i < maxIters; i++)
+    {
+        std::cout << std::format("Trying cost = {}\n", highCost);
+        auto maybePath = findPath(graph, idStart, distanceTarget, elevTarget, searchCfg, highCost);
+        if (maybePath)
+        {
+            std::cout << std::format("Found possible path at {}\n", highCost);
+            printGraphPath(graph, maybePath.value(), std::cout);
+            break;
+        }
+    }
+
+    std::cout << std::format("Search range: [{}, {}]\n", lowCost, highCost);
+    const float eps = 50;
+    lowCost -= 1;
+    // Low cost is not possible, high cost is possible
+    while (highCost - lowCost > eps)
+    {
+        const float midCost = 0.5 * (highCost + lowCost);
+        std::cout << std::format("Trying cost = {}\n", midCost);
+        auto maybePath = findPath(graph, idStart, distanceTarget, elevTarget, searchCfg, midCost);
+        if (maybePath)
+        {
+            std::cout << std::format("Found possible path at {}\n", midCost);
+            printGraphPath(graph, maybePath.value(), std::cout);
+            highCost = midCost;
+        }
+        else
+        {
+            lowCost = midCost;
+        }
+        std::cout << std::format("Search range: [{}, {}]\n", lowCost, highCost);
+    }
 
     return 0;
 }

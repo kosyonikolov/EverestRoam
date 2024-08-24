@@ -1,2 +1,4 @@
 BasedOnStyle: Microsoft
 PointerAlignment: Middle
+BraceWrapping:
+  BeforeLambdaBody: true
